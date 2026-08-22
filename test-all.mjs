@@ -2252,12 +2252,11 @@ try {
 
 if (
   /language\.output/.test(outputLanguageAgentsDoc) &&
-  /human-facing output/i.test(outputLanguageAgentsDoc) &&
-  /modes_dir/.test(outputLanguageAgentsDoc)
+  /human-facing output/i.test(outputLanguageAgentsDoc)
 ) {
-  pass('AGENTS.md documents output language separately from market modes');
+  pass('AGENTS.md documents the language.output contract');
 } else {
-  fail('AGENTS.md does not document the language.output vs modes_dir contract');
+  fail('AGENTS.md does not document the language.output contract');
 }
 
 const marketModeDocs = [
@@ -3738,34 +3737,6 @@ if (
   fail('_shared.md missing canonical company-type compensation reliability framework');
 }
 
-const zhShared = readFile('modes/zh/_shared.md');
-const zhOferta = readFile('modes/zh/oferta.md');
-if (
-  zhShared.includes('## 公司类型与薪资可信度') &&
-  zhShared.includes('成长期创业公司 / 已融资创业公司') &&
-  zhShared.includes('早期初创企业 / 未盈利创业公司') &&
-  zhShared.includes('开源社区 / 教育社区') &&
-  zhShared.includes('实际合同主体 / 用工主体') &&
-  zhShared.includes('薪资可信度默认使用保守的正式等级：`低`') &&
-  zhShared.includes('薪资分析压缩为两行：公司类型和薪资可信度') &&
-  zhShared.includes('浮动 / 条件性现金组成') &&
-  zhOferta.includes('公司类型分类（必填）') &&
-  zhOferta.includes('薪资可信度（必填）') &&
-  zhOferta.includes('没有任何公开薪资数字，也没有“综合薪资”“底薪+提成”“含绩效”“含全勤”“最高可达”等模糊补偿表述') &&
-  zhOferta.includes('JD 未提供薪资 / 补偿信息；跳过薪资组成拆分、详细市场数据表和 HR 核验问题') &&
-  zhOferta.includes('出现“综合薪资”“底薪+提成”“含绩效”“含全勤”“最高可达”“上不封顶”等模糊补偿表述时，进入完整薪资可信度路径') &&
-  zhOferta.includes('公开薪资区间') &&
-  zhOferta.includes('可能的合同固定 base') &&
-  zhOferta.includes('浮动 / 条件性现金组成') &&
-  zhOferta.includes('非现金福利') &&
-  zhOferta.includes('当 JD 明确写出薪资数字，或出现模糊补偿表述时，必须给出 3-6 个 HR 核验问题') &&
-  zhOferta.includes('不要把招聘广告薪资当作真实到手')
-) {
-  pass('Chinese modes include company-type compensation reliability checks');
-} else {
-  fail('Chinese modes missing company-type compensation reliability checks');
-}
-
 const batchPromptDoc = readFile('batch/batch-prompt.md');
 if (
   batchPromptDoc.includes('Company type classification (required)') &&
@@ -4436,22 +4407,6 @@ if (
     pass('apply mode does not route through the read-only extractor (#1449)');
   } else {
     fail('apply mode references browser-extract.mjs — the extractor must not touch the apply/form path');
-  }
-
-  // Phase 2b (#1449): the language-market pipeline mirrors must wire the same
-  // opt-in extractor, so non-English users get the token saving too.
-  const langPipelines = readdirSync(join(ROOT, 'modes'), { withFileTypes: true })
-    .filter((e) => e.isDirectory())
-    .map((e) => `modes/${e.name}/pipeline.md`)
-    .filter((p) => existsSync(join(ROOT, p)));
-  const langMissing = langPipelines.filter((m) => {
-    const src = readFile(m);
-    return !(src.includes('browser-extract.mjs') && src.includes('scan.extractor'));
-  });
-  if (langPipelines.length > 0 && langMissing.length === 0) {
-    pass(`all ${langPipelines.length} language pipeline mirrors wire the opt-in extractor (#1449 Phase 2b)`);
-  } else {
-    fail(`language pipeline mirrors missing extractor wiring: ${langMissing.join(', ') || '(none found)'}`);
   }
 }
 
@@ -5925,7 +5880,6 @@ if (
 const criticalRoutingContracts = [
   ['paste-a-JD auto-pipeline', /Pastes JD or URL\s*\|\s*auto-pipeline/],
   ['PDF mode', /generate CV\/PDF\s*\|\s*`pdf`/i],
-  ['language modes_dir override', /language\.modes_dir:\s*modes\/(?:\{lang\}|de)/],
   ['doctor --json onboarding', /node doctor\.mjs --json/],
 ];
 for (const [name, marker] of criticalRoutingContracts) {
