@@ -188,14 +188,21 @@ html {
   color: var(--muted);
 }
 .report-prose hr { border: none; border-top: 1px solid var(--border); margin: 1.75rem 0; }
-.report-prose table { width: 100%; border-collapse: collapse; font-size: 0.9rem; margin: 1rem 0; }
+/* display:block lets the table scroll horizontally instead of being forced to
+   100% width — a dense table (e.g. the 8-column STAR+R interview plan) was
+   getting its columns squeezed to a few characters wide, with word-break
+   chopping words mid-token to fit. Narrow tables (2-3 columns) are unaffected:
+   their natural width already fits the container, so nothing scrolls. */
+.report-prose table { display: block; overflow-x: auto; max-width: 100%; border-collapse: collapse; font-size: 0.9rem; margin: 1rem 0; }
 .report-prose thead { border-bottom: 1px solid var(--border); }
-.report-prose th { text-align: left; font-weight: 600; color: var(--fg); padding: 0.5rem 0.75rem; vertical-align: top; }
+.report-prose th { text-align: left; font-weight: 600; color: var(--fg); padding: 0.5rem 0.75rem; vertical-align: top; white-space: nowrap; }
 .report-prose td {
   padding: 0.55rem 0.75rem;
   vertical-align: top;
   border-top: 1px solid var(--border);
-  word-break: break-word;
+  min-width: 12rem;
+  max-width: 26rem;
+  overflow-wrap: break-word;
 }
 .report-prose tbody tr:hover { background: color-mix(in srgb, var(--fg) 3%, transparent); }
 .report-prose img { border-radius: 0.5rem; }

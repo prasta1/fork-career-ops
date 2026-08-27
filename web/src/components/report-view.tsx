@@ -138,12 +138,19 @@ export function ReportView({
                 </article>
               );
             }
-            // Verdict (F) leads as a highlighted callout with no competing heading —
-            // it's THE answer. A/B stay expanded (fit detail); C–G collapse as
-            // content (with a 1-line preview); machine artifacts drop to a dimmer
-            // "Technical" tier so the CLI-DNA is present-but-clearly-secondary.
-            const verdict = sections.find((s) => s.letter === "F");
-            const rest = sections.filter((s) => s !== verdict);
+            // The core's current report schema (modes/oferta.md, blocks A-H) has
+            // no dedicated "Verdict" block — the apply/don't-apply call already
+            // surfaces at <2s via the score + Recommended/Below-the-apply-line
+            // badge in the header above. A/B (Role Summary, Match with CV) stay
+            // expanded (fit detail); C-H collapse as content (with a 1-line
+            // preview); machine artifacts drop to a dimmer "Technical" tier so
+            // the CLI-DNA is present-but-clearly-secondary. (Previously this
+            // pulled whatever section happened to be lettered "F" into a
+            // highlighted callout on the assumption F meant Verdict — in this
+            // schema F is "Interview Plan", so that shoved an 8-column STAR+R
+            // table into a box styled for one sentence. Removed rather than
+            // remapped: nothing in A-H is a short verdict paragraph to promote.)
+            const rest = sections;
             const machine = rest.filter((s) => isMachine(s.heading));
             const mainSections = rest.filter((s) => !isMachine(s.heading));
             const anyAB = mainSections.some((s) => s.letter === "A" || s.letter === "B");
@@ -153,15 +160,6 @@ export function ReportView({
                   <article className="report-prose">
                     <ReactMarkdown remarkPlugins={[remarkGfm]}>{intro}</ReactMarkdown>
                   </article>
-                )}
-
-                {verdict && (
-                  <div className="rounded-2xl border border-brand/25 bg-brand-soft/50 px-5 py-4">
-                    <p className="mb-1 font-mono text-[11px] uppercase tracking-[0.16em] text-brand/80">Verdict</p>
-                    <article className="report-prose [&_p]:font-medium [&_p]:text-foreground">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{verdict.content}</ReactMarkdown>
-                    </article>
-                  </div>
                 )}
 
                 {mainSections.map((s, i) => {
