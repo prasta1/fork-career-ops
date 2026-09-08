@@ -50,4 +50,10 @@ const { parsePostingUrl } = mod;
 assert.equal(parsePostingUrl('# Evaluation\n\n**Date:** 2026-09-01\n**URL:** https://jobs.example.com/x/123\n**Score:** 4/5'), 'https://jobs.example.com/x/123');
 assert.equal(parsePostingUrl('**Score:** 4/5\nsee https://elsewhere.example.com'), null);
 
+// Follow-up rows parse by tracker #; header, separator and pin lines are ignored.
+const { parseFollowUps } = mod;
+const fu = parseFollowUps('# Follow-ups\n\n| num | appNum | date | company | role | channel | contact | notes |\n|---|---|---|---|---|---|---|---|\n| 1 | 11 | 2026-09-07 | Hightouch | AI Strategy Consultant | LinkedIn | Hannah F | asked if open |\n- next #62 2026-09-08 (set 2026-09-05)\n');
+assert.deepEqual([...fu.keys()], ['11']);
+assert.deepEqual(fu.get('11')[0], { num: '1', date: '2026-09-07', channel: 'LinkedIn', contact: 'Hannah F', notes: 'asked if open' });
+
 console.log('✓ smoke ok:', Object.keys(hooks).join(', '));

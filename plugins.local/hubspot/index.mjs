@@ -6,7 +6,8 @@
 // naming convention, and the dedup key. Deal stage follows tracker status via
 // STAGES. Each deal is linked to a Company record matched by exact name
 // (created with just the name when missing — reports carry no domain), and
-// gets a "Job posting: <url>" note, the URL read from the row's report header.
+// gets a "Job posting: <url>" note, the URL read from the row's report header,
+// plus one dated note per data/follow-ups.md row logged against that tracker #.
 // Lives entirely behind `node plugins.mjs run hubspot`; never runs during a scan.
 //
 //   node plugins.mjs run hubspot export --dry-run   # preview, zero network
@@ -96,6 +97,31 @@ export function parsePostingUrl(text) {
   return String(text ?? '').match(/^\*\*URL:\*\*\s*(https?:\/\/\S+)/m)?.[1] ?? null;
 }
 
+/**
+ * Follow-up rows from a data/follow-ups.md table, keyed by tracker #.
+ * Header, separator and `- next #N …` pin lines are ignored.
+ * @param {string} text
+ * @returns {Map<string, Array<{num:string,date:string,channel:string,contact:string,notes:string}>>}
+ */
+export function parseFollowUps(text) {
+  const out = new Map();
+  for (const line of String(text ?? '').split('\n')) {
+    if (!line.startsWith('| ')) continue;
+    const c = line.split('|').slice(1, -1).map(x => x.trim());
+    if (!/^\d+$/.test(c[0]) || !/^\d+$/.test(c[1])) continue;
+    const [num, app, date, , , channel, contact, notes] = c;
+    if (!out.has(app)) out.set(app, []);
+    out.get(app).push({ num, date, channel, contact, notes });
+  }
+  return out;
+}
+
+function followUpsByApp() {
+  try { return parseFollowUps(readFileSync(join(ROOT, 'data', 'follow-ups.md'), 'utf8')); } catch { return new Map(); }
+}
+
+const esc = (s) => String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+
 /** Posting URL for a tracker row: a URL cell if the tracker has one, else its report's header. */
 function postingUrl(row) {
   if (/^https?:\/\//i.test(row.url || '')) return row.url.trim();
@@ -114,9 +140,20 @@ export default {
    */
   async export(snapshot, ctx) {
     const rows = Array.isArray(snapshot?.applications) ? snapshot.applications : [];
-    const wanted = rows.map(row => ({ company: (row.company || '').trim(), url: postingUrl(row), props: dealProps(row, ctx.settings) })).filter(w => w.props);
+    const followUps = followUpsByApp();
+    // Every note a deal should carry: the posting URL, then one per logged follow-up.
+    // `key` is the dedup marker searched for in existing note bodies.
+    const notesFor = (row, url) => {
+      const list = [];
+      if (url) list.push({ key: url, body: `Job posting: <a href="${url.replace(/"/g, '%22')}">${url}</a>`, ts: new Date().toISOString() });
+      for (const f of followUps.get((row['#'] || '').trim()) || []) {
+        list.push({ key: `Follow-up #${f.num} (`, body: esc(`Follow-up #${f.num} (${f.date}, ${f.channel}) → ${f.contact}: ${f.notes}`), ts: `${f.date}T12:00:00Z` });
+      }
+      return list;
+    };
+    const wanted = rows.map(row => ({ company: (row.company || '').trim(), notes: notesFor(row, postingUrl(row)), props: dealProps(row, ctx.settings) })).filter(w => w.props);
     if (ctx.dryRun) {
-      for (const { company, url, props } of wanted) ctx.log(`would upsert: ${props.dealname} → ${props.dealstage}  (link company: ${company}; note: ${url || 'no URL found'})`);
+      for (const { company, notes, props } of wanted) ctx.log(`would upsert: ${props.dealname} → ${props.dealstage}  (link company: ${company}; notes: ${notes.map(n => n.key.startsWith('http') ? 'posting URL' : n.key.replace(' (', '')).join(', ') || 'none'})`);
       return { pushed: wanted.length };
     }
 
@@ -140,25 +177,30 @@ export default {
       return id;
     };
 
-    // One "Job posting" note per deal. Fresh deals have no notes, so only
-    // existing deals are searched; a note already carrying the URL is left alone.
-    const ensureNote = async (dealId, url, isNew, dealname) => {
+    // Ensure each desired note exists on the deal. Fresh deals have no notes, so
+    // only existing deals are searched (once per deal); a note whose body already
+    // carries the key is left alone.
+    const ensureNotes = async (dealId, notes, isNew, dealname) => {
+      if (!notes.length) return;
+      let existing = [];
       if (!isNew) {
-        const notes = await call(`${NOTES}/search`, 'POST', {
+        const found = await call(`${NOTES}/search`, 'POST', {
           filterGroups: [{ filters: [{ propertyName: 'associations.deal', operator: 'EQ', value: String(dealId) }] }], properties: ['hs_note_body'], limit: 100,
         });
-        if (notes?.results?.some(n => (n.properties?.hs_note_body || '').includes(url))) return;
+        existing = (found?.results || []).map(n => n.properties?.hs_note_body || '');
       }
-      const safe = url.replace(/"/g, '%22');
-      await call(NOTES, 'POST', {
-        properties: { hs_timestamp: new Date().toISOString(), hs_note_body: `Job posting: <a href="${safe}">${safe}</a>` },
-        associations: [{ to: { id: dealId }, types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: NOTE_TO_DEAL }] }],
-      });
-      ctx.log(`noted: ${dealname} ← ${url}`);
+      for (const n of notes) {
+        if (existing.some(b => b.includes(n.key))) continue;
+        await call(NOTES, 'POST', {
+          properties: { hs_timestamp: n.ts, hs_note_body: n.body },
+          associations: [{ to: { id: dealId }, types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: NOTE_TO_DEAL }] }],
+        });
+        ctx.log(`noted: ${dealname} ← ${n.key.startsWith('http') ? n.key : n.key.replace(' (', '')}`);
+      }
     };
 
     let pushed = 0;
-    for (const { company, url, props } of wanted) {
+    for (const { company, notes, props } of wanted) {
       const cid = await companyId(company);
       const hit = (await searchByName(DEALS, 'dealname', props.dealname))?.results?.[0];
       let dealId = hit?.id;
@@ -170,7 +212,7 @@ export default {
       }
       // ponytail: idempotent PUT every run (60 cheap calls) beats a per-deal GET to check whether the link already exists
       await call(`${HUB}/v4/objects/deals/${dealId}/associations/default/companies/${cid}`, 'PUT');
-      if (url) await ensureNote(dealId, url, !hit, props.dealname);
+      await ensureNotes(dealId, notes, !hit, props.dealname);
       pushed++;
     }
     return { pushed };

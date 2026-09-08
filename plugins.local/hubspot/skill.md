@@ -12,7 +12,9 @@ tracker row, named `Company - Role`; that name is the dedup key. Each deal is
 linked to a Company record matched by exact name and created (name only, no
 domain) when missing — add domains in HubSpot yourself if you want enrichment.
 Each deal also gets one "Job posting: <url>" note, the URL read from the row's
-report header (`**URL:**`); a deal already carrying that URL in a note is skipped.
+report header (`**URL:**`), and one dated note per `data/follow-ups.md` row logged
+against that tracker # (`Follow-up #N (date, channel) → contact: notes`). Notes
+already on the deal are never duplicated.
 
 ## Commands
 
