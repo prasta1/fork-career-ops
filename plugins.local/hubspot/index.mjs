@@ -5,18 +5,26 @@
 // One deal per tracker row, named "Company - Role" — the portal's existing
 // naming convention, and the dedup key. Deal stage follows tracker status via
 // STAGES. Each deal is linked to a Company record matched by exact name
-// (created with just the name when missing — reports carry no domain).
+// (created with just the name when missing — reports carry no domain), and
+// gets a "Job posting: <url>" note, the URL read from the row's report header.
 // Lives entirely behind `node plugins.mjs run hubspot`; never runs during a scan.
 //
 //   node plugins.mjs run hubspot export --dry-run   # preview, zero network
 //   node plugins.mjs run hubspot export             # upsert deals
 
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { canonicalStatus } from '../../plugins/notion/_notion.mjs';
 import { parseScore } from '../../plugins/notion/index.mjs';
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 const HUB = 'https://api.hubapi.com/crm';
 const DEALS = `${HUB}/v3/objects/deals`;
 const COMPANIES = `${HUB}/v3/objects/companies`;
+const NOTES = `${HUB}/v3/objects/notes`;
+const NOTE_TO_DEAL = 214; // HubSpot-defined association type id
 
 // Canonical tracker state → stage id in the portal's "Job Search Pipeline"
 // (HubSpot pipeline id "default"). Ids are portal-specific: the labels shown in
@@ -77,6 +85,22 @@ export function dealProps(row, settings = {}) {
   return { dealname: `${company} - ${role}`, pipeline: settings.pipeline || 'default', dealstage, description };
 }
 
+/**
+ * Posting URL from a report's header (`**URL:** https://…`), or null.
+ * @param {string} text  Report markdown.
+ */
+export function parsePostingUrl(text) {
+  return String(text ?? '').match(/^\*\*URL:\*\*\s*(https?:\/\/\S+)/m)?.[1] ?? null;
+}
+
+/** Posting URL for a tracker row: a URL cell if the tracker has one, else its report's header. */
+function postingUrl(row) {
+  if (/^https?:\/\//i.test(row.url || '')) return row.url.trim();
+  const report = (row.report || '').match(/\((?:\.\.\/)?(reports\/[^)]+)\)/)?.[1];
+  if (!report) return null;
+  try { return parsePostingUrl(readFileSync(join(ROOT, report), 'utf8')); } catch { return null; }
+}
+
 export default {
   /**
    * export: upsert each tracker row as a HubSpot deal.
@@ -87,9 +111,9 @@ export default {
    */
   async export(snapshot, ctx) {
     const rows = Array.isArray(snapshot?.applications) ? snapshot.applications : [];
-    const wanted = rows.map(row => ({ company: (row.company || '').trim(), props: dealProps(row, ctx.settings) })).filter(w => w.props);
+    const wanted = rows.map(row => ({ company: (row.company || '').trim(), url: postingUrl(row), props: dealProps(row, ctx.settings) })).filter(w => w.props);
     if (ctx.dryRun) {
-      for (const { company, props } of wanted) ctx.log(`would upsert: ${props.dealname} → ${props.dealstage}  (link company: ${company})`);
+      for (const { company, url, props } of wanted) ctx.log(`would upsert: ${props.dealname} → ${props.dealstage}  (link company: ${company}; note: ${url || 'no URL found'})`);
       return { pushed: wanted.length };
     }
 
@@ -113,8 +137,25 @@ export default {
       return id;
     };
 
+    // One "Job posting" note per deal. Fresh deals have no notes, so only
+    // existing deals are searched; a note already carrying the URL is left alone.
+    const ensureNote = async (dealId, url, isNew, dealname) => {
+      if (!isNew) {
+        const notes = await call(`${NOTES}/search`, 'POST', {
+          filterGroups: [{ filters: [{ propertyName: 'associations.deal', operator: 'EQ', value: String(dealId) }] }], properties: ['hs_note_body'], limit: 100,
+        });
+        if (notes?.results?.some(n => (n.properties?.hs_note_body || '').includes(url))) return;
+      }
+      const safe = url.replace(/"/g, '%22');
+      await call(NOTES, 'POST', {
+        properties: { hs_timestamp: new Date().toISOString(), hs_note_body: `Job posting: <a href="${safe}">${safe}</a>` },
+        associations: [{ to: { id: dealId }, types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: NOTE_TO_DEAL }] }],
+      });
+      ctx.log(`noted: ${dealname} ← ${url}`);
+    };
+
     let pushed = 0;
-    for (const { company, props } of wanted) {
+    for (const { company, url, props } of wanted) {
       const cid = await companyId(company);
       const hit = (await searchByName(DEALS, 'dealname', props.dealname))?.results?.[0];
       let dealId = hit?.id;
@@ -122,6 +163,7 @@ export default {
       else if (movesForward(hit.properties?.dealstage, props.dealstage)) { await call(`${DEALS}/${hit.id}`, 'PATCH', { properties: { dealstage: props.dealstage } }); ctx.log(`moved: ${props.dealname} → ${props.dealstage}`); }
       // ponytail: idempotent PUT every run (60 cheap calls) beats a per-deal GET to check whether the link already exists
       await call(`${HUB}/v4/objects/deals/${dealId}/associations/default/companies/${cid}`, 'PUT');
+      if (url) await ensureNote(dealId, url, !hit, props.dealname);
       pushed++;
     }
     return { pushed };

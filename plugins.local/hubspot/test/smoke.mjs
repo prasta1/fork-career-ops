@@ -42,4 +42,9 @@ assert.equal(movesForward('1433346929', 'closedlost'), true);
 assert.equal(movesForward('1433346584', '1433346584'), false);
 assert.equal(movesForward('custom_x', '1433346584'), true);
 
+// Posting URL comes from the report header line and nothing else.
+const { parsePostingUrl } = mod;
+assert.equal(parsePostingUrl('# Evaluation\n\n**Date:** 2026-09-01\n**URL:** https://jobs.example.com/x/123\n**Score:** 4/5'), 'https://jobs.example.com/x/123');
+assert.equal(parsePostingUrl('**Score:** 4/5\nsee https://elsewhere.example.com'), null);
+
 console.log('✓ smoke ok:', Object.keys(hooks).join(', '));

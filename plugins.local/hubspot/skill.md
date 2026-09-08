@@ -11,6 +11,8 @@ stays the source of truth — HubSpot is an additive mirror. One deal per
 tracker row, named `Company - Role`; that name is the dedup key. Each deal is
 linked to a Company record matched by exact name and created (name only, no
 domain) when missing — add domains in HubSpot yourself if you want enrichment.
+Each deal also gets one "Job posting: <url>" note, the URL read from the row's
+report header (`**URL:**`); a deal already carrying that URL in a note is skipped.
 
 ## Commands
 
@@ -25,7 +27,9 @@ domain) when missing — add domains in HubSpot yourself if you want enrichment.
 
 1. HubSpot → Settings → Integrations → Private Apps → Create. Scopes:
    `crm.objects.deals.read`, `crm.objects.deals.write`,
-   `crm.objects.companies.read`, `crm.objects.companies.write`.
+   `crm.objects.companies.read`, `crm.objects.companies.write`, and — required
+   by HubSpot's Notes API even for deal notes — `crm.objects.contacts.read`,
+   `crm.objects.contacts.write`.
 2. Put the token in `.env`: `HUBSPOT_ACCESS_TOKEN=pat-na1-…`
 3. `node plugins.mjs enable hubspot --confirm` (already done if you're reading
    this via `plugins.mjs skill`).
