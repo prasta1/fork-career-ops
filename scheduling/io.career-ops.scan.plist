@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>io.career-ops.scan</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/Users/prasta/.local/share/fnm/node-versions/v24.15.0/installation/bin/node</string>
+		<string>scan.mjs</string>
+	</array>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>PATH</key>
+		<string>/Users/prasta/.local/share/fnm/node-versions/v24.15.0/installation/bin:/Users/prasta/.local/bin:/usr/local/bin:/usr/bin:/bin</string>
+	</dict>
+	<key>WorkingDirectory</key>
+	<string>/Users/prasta/Projects/forks/fork-career-ops</string>
+	<key>RunAtLoad</key>
+	<false/>
+	<key>StandardOutPath</key>
+	<string>/Users/prasta/Projects/forks/fork-career-ops/data/scan.log</string>
+	<key>StandardErrorPath</key>
+	<string>/Users/prasta/Projects/forks/fork-career-ops/data/scan.log</string>
+	<key>StartCalendarInterval</key>
+	<array>
+		<dict><key>DayOfWeek</key><integer>1</integer><key>Hour</key><integer>7</integer><key>Minute</key><integer>0</integer></dict>
+		<dict><key>DayOfWeek</key><integer>2</integer><key>Hour</key><integer>7</integer><key>Minute</key><integer>0</integer></dict>
+		<dict><key>DayOfWeek</key><integer>3</integer><key>Hour</key><integer>7</integer><key>Minute</key><integer>0</integer></dict>
+		<dict><key>DayOfWeek</key><integer>4</integer><key>Hour</key><integer>7</integer><key>Minute</key><integer>0</integer></dict>
+		<dict><key>DayOfWeek</key><integer>5</integer><key>Hour</key><integer>7</integer><key>Minute</key><integer>0</integer></dict>
+	</array>
+</dict>
+</plist>
