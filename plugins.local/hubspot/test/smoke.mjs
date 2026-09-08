@@ -29,6 +29,9 @@ assert.match(p.description, /reports\/012-acme-2026-09-01\.md/);
 // Aliases resolve through templates/states.yml; SKIP rows are never mirrored.
 assert.equal(dealProps({ ...row, status: '**entrevista**' }).dealstage, '1433346930'); // Interviewing
 assert.equal(dealProps({ ...row, status: 'SKIP' }), null);
+// Closed-lost rows carry the tracker note as the closed-lost reason; open rows don't.
+assert.equal(dealProps({ ...row, status: 'Discarded', notes: 'no GSI evidence' }).closed_lost_reason, 'no GSI evidence');
+assert.equal(dealProps({ ...row, notes: 'no GSI evidence' }).closed_lost_reason, undefined);
 assert.equal(dealProps({ ...row, role: '' }), null);
 // Settings override the stage map and pipeline.
 assert.equal(dealProps(row, { pipeline: 'p9', stages: { Applied: 'stage_x' } }).dealstage, 'stage_x');

@@ -82,7 +82,10 @@ export function dealProps(row, settings = {}) {
     `status ${status}`,
     report,
   ].filter(Boolean).join(' · ');
-  return { dealname: `${company} - ${role}`, pipeline: settings.pipeline || 'default', dealstage, description };
+  const props = { dealname: `${company} - ${role}`, pipeline: settings.pipeline || 'default', dealstage, description };
+  // A closed-lost deal carries the tracker note as HubSpot's stock closed-lost reason.
+  if (dealstage === 'closedlost' && (row.notes || '').trim()) props.closed_lost_reason = row.notes.trim();
+  return props;
 }
 
 /**
@@ -160,7 +163,11 @@ export default {
       const hit = (await searchByName(DEALS, 'dealname', props.dealname))?.results?.[0];
       let dealId = hit?.id;
       if (!hit) { dealId = (await call(DEALS, 'POST', { properties: props })).id; ctx.log(`created: ${props.dealname}`); }
-      else if (movesForward(hit.properties?.dealstage, props.dealstage)) { await call(`${DEALS}/${hit.id}`, 'PATCH', { properties: { dealstage: props.dealstage } }); ctx.log(`moved: ${props.dealname} → ${props.dealstage}`); }
+      else if (movesForward(hit.properties?.dealstage, props.dealstage)) {
+        const { dealstage, closed_lost_reason } = props;
+        await call(`${DEALS}/${hit.id}`, 'PATCH', { properties: closed_lost_reason ? { dealstage, closed_lost_reason } : { dealstage } });
+        ctx.log(`moved: ${props.dealname} → ${dealstage}`);
+      }
       // ponytail: idempotent PUT every run (60 cheap calls) beats a per-deal GET to check whether the link already exists
       await call(`${HUB}/v4/objects/deals/${dealId}/associations/default/companies/${cid}`, 'PUT');
       if (url) await ensureNote(dealId, url, !hit, props.dealname);
