@@ -32,6 +32,7 @@ batch/batch-state-recovery.d/
 batch/batch-input.tsv
 batch/tracker-additions/**/*.tsv
 !batch/tracker-additions/.gitkeep
+batch/cv-manifest.json*
 jds/*
 !jds/.gitkeep
 
