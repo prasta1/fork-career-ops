@@ -540,7 +540,17 @@ if (!existsSync(PORTALS_FILE)) {
       ...(Array.isArray(cfg.tracked_companies) ? cfg.tracked_companies : []),
       ...(Array.isArray(cfg.job_boards) ? cfg.job_boards : []),
     ];
-    const providers = await loadProviders(join(CAREER_OPS, 'providers'));
+    // CODE_ROOT, not CAREER_OPS: providers/ ships with the scripts, while
+    // CAREER_OPS is the (possibly separate) data root. Resolving against the
+    // data root made loadProviders return an empty map under a CAREER_OPS_ROOT
+    // override, and every enabled entry then read as "no provider claims it".
+    const providers = await loadProviders(join(CODE_ROOT, 'providers'));
+    // Fold in enabled keyed/auth-gated provider plugins, exactly as scan.mjs and
+    // verify-portals.mjs do — without this the check resolves only the modules
+    // under providers/ and reports every plugin-provider entry as unknown
+    // (#4026). No-op for a plugin-free install.
+    const { mergeProviderPlugins } = await import('./plugins/_engine.mjs');
+    await mergeProviderPlugins(providers, { root: CODE_ROOT });
     const { silent, handoff, unknownProvider } = findUnclaimedEntries(entries, providers);
 
     // findUnclaimedEntries silently skips an entry with no (or blank) `name` —
