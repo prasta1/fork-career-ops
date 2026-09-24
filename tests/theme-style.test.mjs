@@ -128,6 +128,27 @@ try {
       fail(`${tpl}: hasRoot=${hasRoot} usesVar=${usesVar} leftoverHardcoded=${leftoverHardcoded} circular=${circular}`);
     }
   }
+  // Template guard (accent sibling of the --secondary-color guard above): the
+  // accent surfaces — section titles, competency tags, project badges, gradient
+  // stops — were literal teal, so a profile `style: accent_color:` retinted the
+  // headings and left the tags teal on an otherwise re-themed CV. They now derive
+  // from --accent-color (tag fill/border via color-mix), leaving exactly one
+  // hardcoded teal per template: the :root default itself. Chinese Minimal is
+  // excluded for the same reason as above — its own palette, covered by
+  // zh-minimal-theme.test.mjs.
+  for (const tpl of ['templates/cv-template.html', 'templates/resume-template.html']) {
+    const src = readFileSync(join(ROOT, tpl), 'utf-8');
+    const hasRoot = /:root\s*\{[^}]*--accent-color:\s*hsl\(187 74% 32%\);/s.test(src);
+    const leftoverHardcoded = (src.match(/hsl\(187[ ,]/g) || []).length > 1; // exactly one: the :root default
+    const derivesTagFill = /color-mix\(in srgb, var\(--accent-color\) \d+%, #ffffff\)/.test(src);
+    const circular = /--accent-color:\s*var\(/.test(src);
+    if (hasRoot && !leftoverHardcoded && derivesTagFill && !circular) {
+      pass(`${tpl} derives every accent surface from --accent-color (no leftover hardcoded teal)`);
+    } else {
+      fail(`${tpl}: hasRoot=${hasRoot} leftoverHardcoded=${leftoverHardcoded} derivesTagFill=${derivesTagFill} circular=${circular}`);
+    }
+  }
+
   // Regression: localized CJK font stacks must honor the profile
   // --font-family override while keeping their curated fallbacks active after it.
   {

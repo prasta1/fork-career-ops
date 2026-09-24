@@ -60,6 +60,7 @@
      pre-existing and out of scope here). Overridable via config/profile.yml
      `style:`, which the PDF pipeline injects as a later :root block. */
   :root {
+    --accent-color: hsl(187 74% 32%);
     --secondary-color: hsl(270, 70%, 45%);
   }
 
@@ -120,7 +121,7 @@
 
   .header-gradient {
     height: 2px;
-    background: linear-gradient(to right, hsl(187, 74%, 32%), var(--secondary-color));
+    background: linear-gradient(to right, var(--accent-color), var(--secondary-color));
     border-radius: 1px;
     margin-bottom: 10px;
   }
@@ -175,7 +176,7 @@
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.06em;
-    color: hsl(187, 74%, 32%);
+    color: var(--accent-color);
     border-bottom: 1.5px solid #e2e2e2;
     padding-bottom: 4px;
     margin-bottom: 10px;
@@ -205,11 +206,11 @@
     font-family: 'DM Sans', sans-serif;
     font-size: 10px;
     font-weight: 500;
-    color: hsl(187, 74%, 28%);
-    background: hsl(187, 40%, 95%);
+    color: var(--accent-color);
+    background: color-mix(in srgb, var(--accent-color) 7%, #ffffff);
     padding: 4px 10px;
     border-radius: 3px;
-    border: 1px solid hsl(187, 40%, 88%);
+    border: 1px solid color-mix(in srgb, var(--accent-color) 18%, #ffffff);
   }
 
   /* === WORK EXPERIENCE === */
@@ -281,8 +282,8 @@
   .project-badge {
     font-size: 9px;
     font-weight: 500;
-    color: hsl(187, 74%, 32%);
-    background: hsl(187, 40%, 95%);
+    color: var(--accent-color);
+    background: color-mix(in srgb, var(--accent-color) 7%, #ffffff);
     padding: 1px 6px;
     border-radius: 2px;
     margin-left: 6px;
@@ -437,7 +438,7 @@
   }
 
   html[lang="ar"] .header-gradient {
-    background: linear-gradient(to left, hsl(187, 74%, 32%), var(--secondary-color));
+    background: linear-gradient(to left, var(--accent-color), var(--secondary-color));
   }
 
   html[lang="ar"] .job ul {

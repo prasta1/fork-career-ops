@@ -172,15 +172,18 @@
     gap: 8px;
   }
 
+  /* Tag fill and border are derived from --accent-color rather than hardcoded,
+     so a profile `style: accent_color:` override retints them too. They were
+     literal teal before, which left tags teal on an otherwise re-themed CV. */
   .competency-tag {
     font-family: var(--font-family);
     font-size: 10px;
     font-weight: 500;
-    color: hsl(187, 74%, 28%);
-    background: hsl(187, 40%, 95%);
+    color: var(--accent-color);
+    background: color-mix(in srgb, var(--accent-color) 7%, #ffffff);
     padding: 4px 10px;
     border-radius: 3px;
-    border: 1px solid hsl(187, 40%, 88%);
+    border: 1px solid color-mix(in srgb, var(--accent-color) 18%, #ffffff);
   }
 
   /* === WORK EXPERIENCE === */
@@ -262,7 +265,7 @@
     font-size: 9px;
     font-weight: 500;
     color: var(--accent-color);
-    background: hsl(187, 40%, 95%);
+    background: color-mix(in srgb, var(--accent-color) 7%, #ffffff);
     padding: 1px 6px;
     border-radius: 2px;
     margin-left: 6px;
