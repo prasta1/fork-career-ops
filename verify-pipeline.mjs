@@ -567,7 +567,6 @@ if (!existsSync(PORTALS_FILE)) {
   try {
     const { findUnclaimedEntries } = await import('./audit-portals.mjs');
     const { loadProviders } = await import('./providers/_registry.mjs');
-    const { mergeProviderPlugins } = await import('./plugins/_engine.mjs');
     const yaml = await import('js-yaml');
 
     const cfg = yaml.load(readFileSync(PORTALS_FILE, 'utf-8')) || {};
@@ -577,14 +576,16 @@ if (!existsSync(PORTALS_FILE)) {
       ...(Array.isArray(cfg.tracked_companies) ? cfg.tracked_companies : []),
       ...(Array.isArray(cfg.job_boards) ? cfg.job_boards : []),
     ];
-    // providers/ and plugins/ both ship in the code layer — resolve them from
-    // CODE_ROOT (scan.mjs does the same). Without mergeProviderPlugins() the
-    // health check sees only providers/*.mjs and reports every enabled
-    // plugin-provider entry as an unknown provider that "never scans", while
-    // the scanner resolves and scans it (#4026). No-op for a plugin-free
-    // install: mergeProviderPlugins returns before any work when
-    // config/plugins.yml is absent.
+    // CODE_ROOT, not CAREER_OPS: providers/ ships with the scripts, while
+    // CAREER_OPS is the (possibly separate) data root. Resolving against the
+    // data root made loadProviders return an empty map under a CAREER_OPS_ROOT
+    // override, and every enabled entry then read as "no provider claims it".
     const providers = await loadProviders(join(CODE_ROOT, 'providers'));
+    // Fold in enabled keyed/auth-gated provider plugins, exactly as scan.mjs and
+    // verify-portals.mjs do — without this the check resolves only the modules
+    // under providers/ and reports every plugin-provider entry as unknown
+    // (#4026). No-op for a plugin-free install.
+    const { mergeProviderPlugins } = await import('./plugins/_engine.mjs');
     await mergeProviderPlugins(providers, { root: CODE_ROOT });
     const { silent, handoff, unknownProvider } = findUnclaimedEntries(entries, providers);
 
@@ -644,6 +645,67 @@ for (let i = 0; i < lines.length; i++) {
   controlByteRows++;
 }
 if (controlByteRows === 0) ok('No control characters in tracker cells');
+
+// --- Check 17: installed launchd jobs still point at files that exist (#local) ---
+// A launchd plist in ~/Library/LaunchAgents runs a script that lives INSIDE this
+// working tree, but the plist is not versioned with the tree. Check out a branch
+// that predates the script and the file vanishes while the job keeps firing at the
+// old path — launchd reports 127 only in `launchctl list`, and the error lands at
+// the bottom of the job's own log directly beneath the previous run's success line.
+// That is how the weekday scan sat dead from 2026-09-17 to 2026-09-18 unnoticed.
+//
+// Two failure shapes, both silent, so both are checked here:
+//   1. a ProgramArguments path that no longer exists  -> error (the job cannot run)
+//   2. installed plist differs from the scheduling/ copy -> warn (they have drifted;
+//      one of them is stale and there is no other signal which)
+//
+// macOS-only and opt-in by nature: no career-ops plists installed means nothing to
+// check and nothing is printed, so this is a no-op for everyone who never scheduled.
+if (process.platform === 'darwin') {
+  const agentsDir = join(process.env.HOME || '', 'Library/LaunchAgents');
+  let plists = [];
+  try {
+    plists = readdirSync(agentsDir).filter(f => f.startsWith('io.career-ops.') && f.endsWith('.plist'));
+  } catch { /* no LaunchAgents dir — nothing scheduled */ }
+
+  let jobProblems = 0;
+  for (const file of plists) {
+    const loadedPath = join(agentsDir, file);
+    let xml = '';
+    try {
+      xml = readFileSync(loadedPath, 'utf-8');
+    } catch (err) {
+      warn(`launchd: ${file} could not be read (${err.message})`);
+      jobProblems++;
+      continue;
+    }
+
+    // Only ProgramArguments holds executable paths. Scoped deliberately: the
+    // EnvironmentVariables PATH value is also a <string> starting with "/" and
+    // is a colon-joined list, so checking every <string> in the file would
+    // report it missing on every run.
+    const block = xml.match(/<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/);
+    const args = block ? [...block[1].matchAll(/<string>([^<]*)<\/string>/g)].map(m => m[1]) : [];
+    for (const arg of args.filter(a => a.startsWith('/'))) {
+      if (!existsSync(arg)) {
+        error(`launchd: ${file} runs "${arg}", which does not exist — the job fails with exit 127 on every fire. If the path is inside this repo, check whether the current branch contains it`);
+        jobProblems++;
+      }
+    }
+
+    // The repo copy is the source of truth for what the job SHOULD be; a
+    // difference means the installed one was never refreshed (or was hand-edited).
+    const repoCopy = join(CAREER_OPS, 'scheduling', file);
+    if (existsSync(repoCopy) && readFileSync(repoCopy, 'utf-8') !== xml) {
+      warn(`launchd: ${file} differs from scheduling/${file} — installed and repo copies have drifted; re-copy whichever is correct and reload it`);
+      jobProblems++;
+    }
+  }
+
+  if (plists.length > 0 && jobProblems === 0) {
+    ok(`All ${plists.length} installed launchd job(s) resolve and match scheduling/`);
+  }
+}
 
 // --- Summary ---
 console.log('\n' + '='.repeat(50));

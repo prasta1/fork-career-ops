@@ -97,7 +97,6 @@ scheduling/
 
 # Generated
 .resolved-prompt-*
-node_modules/
 bun.lock
 # Working copy the test suite makes under the repo root (test-all.mjs
 # `mkdtempSync(join(ROOT, '.tmp-script-test-'))`). A clean run deletes it; a
