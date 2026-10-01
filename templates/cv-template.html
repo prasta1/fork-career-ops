@@ -84,6 +84,17 @@
     line-height: 1.1;
   }
 
+  .header-title {
+    font-family: var(--font-family);
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--accent-color);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 8px;
+    line-height: 1.2;
+  }
+
   .header-gradient {
     height: 2px;
     background: linear-gradient(to right, var(--accent-color), var(--secondary-color));
@@ -172,18 +183,15 @@
     gap: 8px;
   }
 
-  /* Tag fill and border are derived from --accent-color rather than hardcoded,
-     so a profile `style: accent_color:` override retints them too. They were
-     literal teal before, which left tags teal on an otherwise re-themed CV. */
   .competency-tag {
     font-family: var(--font-family);
     font-size: 10px;
     font-weight: 500;
-    color: var(--accent-color);
-    background: color-mix(in srgb, var(--accent-color) 7%, #ffffff);
+    color: hsl(187, 74%, 28%);
+    background: hsl(187, 40%, 95%);
     padding: 4px 10px;
     border-radius: 3px;
-    border: 1px solid color-mix(in srgb, var(--accent-color) 18%, #ffffff);
+    border: 1px solid hsl(187, 40%, 88%);
   }
 
   /* === WORK EXPERIENCE === */
@@ -222,6 +230,14 @@
   .job-location {
     font-size: 10px;
     color: #888;
+  }
+
+  .job-context {
+    font-style: italic;
+    font-size: 10.5px;
+    line-height: 1.55;
+    color: #555;
+    margin-top: 3px;
   }
 
   .job ul {
@@ -265,7 +281,7 @@
     font-size: 9px;
     font-weight: 500;
     color: var(--accent-color);
-    background: color-mix(in srgb, var(--accent-color) 7%, #ffffff);
+    background: hsl(187, 40%, 95%);
     padding: 1px 6px;
     border-radius: 2px;
     margin-left: 6px;
@@ -461,6 +477,7 @@
   .job-company,
   .job-role,
   .job-location,
+  .job-context,
   .edu-location,
   .project-title {
     break-after: avoid;
@@ -484,6 +501,7 @@
   }
 
   html[lang="ar"] .header h1,
+  html[lang="ar"] .header-title,
   html[lang="ar"] .section-title,
   html[lang="ar"] .job-company,
   html[lang="ar"] .project-title,
@@ -533,6 +551,7 @@
   }
 
   html[lang="ja"] .header h1,
+  html[lang="ja"] .header-title,
   html[lang="ja"] .section-title,
   html[lang="ja"] .job-company,
   html[lang="ja"] .project-title,
@@ -559,6 +578,7 @@
   }
 
   html[lang="zh-CN"] .header h1,
+  html[lang="zh-CN"] .header-title,
   html[lang="zh-CN"] .section-title,
   html[lang="zh-CN"] .job-company,
   html[lang="zh-CN"] .project-title,
@@ -566,6 +586,7 @@
   html[lang="zh-CN"] .competency-tag,
   html[lang="zh-CN"] .skill-category,
   html[lang="zh"] .header h1,
+  html[lang="zh"] .header-title,
   html[lang="zh"] .section-title,
   html[lang="zh"] .job-company,
   html[lang="zh"] .project-title,
@@ -593,6 +614,7 @@
   }
 
   html[lang="ko"] .header h1,
+  html[lang="ko"] .header-title,
   html[lang="ko"] .section-title,
   html[lang="ko"] .job-company,
   html[lang="ko"] .project-title,
@@ -624,6 +646,7 @@
   }
 
   html[lang="zh-TW"] .header h1,
+  html[lang="zh-TW"] .header-title,
   html[lang="zh-TW"] .section-title,
   html[lang="zh-TW"] .job-company,
   html[lang="zh-TW"] .project-title,
@@ -655,6 +678,7 @@
   <!-- HEADER -->
   <div class="header">
     <h1>{{NAME}}</h1>
+    {{TITLE_BLOCK}}
     <div class="header-gradient"></div>
     <div class="contact-row">
       <a href="tel:{{PHONE}}">{{PHONE}}</a>
