@@ -164,7 +164,8 @@ export function analyzeCoverage(keywords, cvText) {
 }
 
 /**
- * Pull keywords out of a report's `## Keywords extracted` block. Liberal:
+ * Pull keywords out of a report's `## Keywords extracted` block (or the
+ * `## Extracted Keywords` order that batch/batch-prompt.md emits). Liberal:
  * accepts bulleted, comma-separated, or one-per-line entries; stops at the next
  * level-2 heading; skips an empty/placeholder parenthetical line. Returns [] if
  * the block is absent.
@@ -178,7 +179,7 @@ export function extractKeywords(reportText) {
   let inBlock = false;
   for (const rawLine of lines) {
     const line = rawLine.trim();
-    if (/^##\s+keywords\s+extracted\b/i.test(line)) { inBlock = true; continue; }
+    if (/^##\s+(keywords\s+extracted|extracted\s+keywords)\b/i.test(line)) { inBlock = true; continue; }
     if (!inBlock) continue;
     if (/^##\s+/.test(line)) break;
     if (!line) continue;
@@ -282,6 +283,9 @@ function runSelfTest() {
   if (variantForms('aws').includes('aw')) failures.push('variantForms truncated acronym aws->aw');
   if (htmlToText('<style>.x{}</style><p>Python &amp; <b>gRPC</b></p>') !== 'Python & gRPC') {
     failures.push('htmlToText strip/decode');
+  }
+  if (extractKeywords('## Extracted Keywords\n\nSaaS, pipeline\n## Next').join() !== 'SaaS,pipeline') {
+    failures.push('batch heading order (## Extracted Keywords)');
   }
 
   if (failures.length) {
