@@ -1,22 +1,28 @@
 import { buildPipelineSankey, layoutSankey } from "@/lib/pipeline-sankey.mjs";
 import { cn } from "@/lib/cn";
 
+/* Six tones, but only three hue families: warm (brand / warn / danger /
+   muted) on the orange-to-brick side, one cool steel accent (info) for the
+   live in-flight path, one green for terminal success. The previous raw
+   Tailwind ramp put five fully-saturated hues on the card at once, which is
+   what made it read as noise. Values are theme vars — tune them in
+   globals.css (--sankey-*), not here. */
 const TONE_NODE: Record<string, string> = {
-  success: "fill-emerald-500",
-  danger: "fill-red-400",
-  info: "fill-sky-500",
-  warn: "fill-amber-400",
-  muted: "fill-zinc-400 dark:fill-zinc-500",
+  success: "fill-sankey-success",
+  danger: "fill-sankey-danger",
+  info: "fill-sankey-info",
+  warn: "fill-sankey-warn",
+  muted: "fill-sankey-muted",
   neutral: "fill-brand",
 };
 
 const TONE_LINK: Record<string, string> = {
-  success: "fill-emerald-500/30",
-  danger: "fill-red-400/30",
-  info: "fill-sky-500/30",
-  warn: "fill-amber-400/30",
-  muted: "fill-zinc-400/30",
-  neutral: "fill-brand/30",
+  success: "fill-sankey-success/35",
+  danger: "fill-sankey-danger/35",
+  info: "fill-sankey-info/35",
+  warn: "fill-sankey-warn/35",
+  muted: "fill-sankey-muted/25",
+  neutral: "fill-brand/35",
 };
 
 type AppRow = { n: string; status: string };
