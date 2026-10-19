@@ -2,13 +2,14 @@ import { spawnHeadlessCli } from "@/lib/spawn-cli.mjs";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { resolveCli } from "@/lib/clis";
+import { cliSubstitutionNotice, cliUnavailableError, resolveCliOrFallback } from "@/lib/clis";
 import { careerOpsRoot, readMemory } from "@/lib/career-ops";
 import { assembleDedupContext } from "@/lib/core/discover";
 import { CAPS } from "@/lib/worker-capabilities.mjs";
 import { scopeFrom } from "@/lib/claude-invocation.mjs";
 import { fencingReport } from "@/lib/cli-fencing.mjs";
 import { codexFencingSupported } from "@/lib/cli-fencing-probe.mjs";
+import { readJsonObject } from "@/lib/json-body";
 
 // Deny list DERIVED, never hand-written: every one of the six advisor argvs
 // that spelled its own omitted MultiEdit, which --permission-mode acceptEdits
@@ -44,19 +45,19 @@ Follow modes/discover.md exactly. You are running headless for the web:
 `;
 
 export async function POST(req: Request) {
-  let body: { query?: string; cliId?: string };
-  try {
-    body = await req.json();
-  } catch {
-    return Response.json({ error: "bad json" }, { status: 400 });
-  }
+  const body = await readJsonObject<{ query?: string; cliId?: string }>(req);
+  if (!body) return Response.json({ error: "bad json" }, { status: 400 });
   const query = (body.query || "").trim();
-  const cliId = body.cliId;
-  if (!query || !cliId) return Response.json({ error: "query and cliId required" }, { status: 400 });
+  const requestedCliId = body.cliId;
+  if (!query || !requestedCliId) return Response.json({ error: "query and cliId required" }, { status: 400 });
 
-  const resolved = resolveCli(cliId);
-  if (!resolved) return Response.json({ error: `CLI '${cliId}' not found on this machine` }, { status: 404 });
+  const resolved = resolveCliOrFallback(requestedCliId);
+  if (!resolved) return Response.json(cliUnavailableError(requestedCliId), { status: 404 });
   const { spec, binPath } = resolved;
+  // The CLI actually running: the Codex isolation probe, fencing and argv below
+  // are all keyed on it.
+  const cliId = spec.id;
+  const substitution = cliSubstitutionNotice(resolved);
 
   // Read the CANONICAL mode at request time — single source of truth, never a
   // homegrown prompt. Missing (older core) → graceful 400 so the Scan tab stays usable.
@@ -292,6 +293,7 @@ export async function POST(req: Request) {
       if (fencing.notice) safeEnqueue(`⚠️ ${fencing.notice}
 
 `);
+      if (substitution) safeEnqueue(`⚠️ ${substitution}\n\n`);
 
       child.stdout.on("data", (d: Buffer) => {
         if (closed) return;

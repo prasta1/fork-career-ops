@@ -9,6 +9,16 @@ import path from "node:path";
 import "../helpers/web-ts-alias-loader.mjs";
 import { classifyLeaf, buildPipelineSankey, layoutSankey, parseStatusLog, statusToken } from "../../src/lib/pipeline-sankey.mjs";
 
+test("Assessment has its own engaged leaf and records a submitted application", () => {
+  const graph = buildPipelineSankey([{ n: '1', status: 'Assessment' }]);
+  assert.equal(classifyLeaf({ n: '1', status: 'online assessment' }, []), 'assessment');
+  assert.equal(graph.nodes.find(node => node.id === 'assessment')?.value, 1);
+  assert.equal(graph.nodes.find(node => node.id === 'submitted')?.value, 1);
+  assert.ok(!graph.nodes.some(node => node.id === 'interview'));
+  assert.equal(classifyLeaf({ n: '1', status: 'Discarded' },
+    [{ num: 1, from: 'Assessment', to: 'Discarded' }]), 'discarded');
+});
+
 test("statusToken uses canonStatus aliases (same map as Analytics)", () => {
   assert.equal(statusToken("Interview"), "INTERVIEW");
   assert.equal(statusToken("Interview 2026-08-20"), "INTERVIEW");
@@ -157,11 +167,12 @@ test("layoutSankey positions nodes and draws a path per live link", () => {
 // in career-ops.ts, reached through the shared @/ alias hook, with
 // CAREER_OPS_ROOT pointed at a scratch data root.
 const skipTs = !process.features?.typescript && "this Node cannot import career-ops.ts (no type stripping)";
-const { readStatusLog } = skipTs ? {} : await import("@/lib/career-ops");
+const { readStatusLog, readApplicationStatusLog } = skipTs ? {} : await import("@/lib/career-ops");
 
 function withDataRoot(setup, fn) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "sankey-status-log-"));
   fs.mkdirSync(path.join(root, "data"));
+  fs.writeFileSync(path.join(root, "data/applications.md"), "");
   setup(path.join(root, "data"));
   const prev = process.env.CAREER_OPS_ROOT;
   process.env.CAREER_OPS_ROOT = root;
@@ -183,6 +194,55 @@ test("readStatusLog: a present log is parsed from the data root", { skip: skipTs
 
 test("readStatusLog: a missing log is an empty log", { skip: skipTs }, () => {
   assert.deepEqual(withDataRoot(() => {}, () => readStatusLog()), []);
+});
+
+test("Sankey and cumulative tiles read the same active tracker's ledger", { skip: skipTs }, (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "sankey-tracker-"));
+  const priorRoot = process.env.CAREER_OPS_ROOT;
+  const priorTracker = process.env.CAREER_OPS_TRACKER;
+  const ledger = (num) => `${num}\t2026-08-26\tOffer\tRejected\tset-status\t\n`;
+  try {
+    process.env.CAREER_OPS_ROOT = root;
+    delete process.env.CAREER_OPS_TRACKER;
+    for (const [dir, num] of [["", 1], ["data", 2], ["custom", 3]]) {
+      fs.mkdirSync(path.join(root, dir), { recursive: true });
+      fs.writeFileSync(path.join(root, dir, "applications.md"), "");
+      fs.writeFileSync(path.join(root, dir, "status-log.tsv"), ledger(num));
+    }
+    const check = (num) => {
+      assert.equal(readApplicationStatusLog(), ledger(num));
+      assert.deepEqual(readStatusLog(), parseStatusLog(ledger(num)));
+    };
+    check(2);
+    fs.unlinkSync(path.join(root, "data/applications.md"));
+    check(1);
+    const custom = path.join(root, "custom/applications.md");
+    process.env.CAREER_OPS_TRACKER = custom;
+    check(3);
+    process.env.CAREER_OPS_TRACKER = path.relative(process.cwd(), custom);
+    check(3);
+    // A FILE symlink needs a privilege a non-elevated Windows shell lacks, and
+    // a junction only links directories, so this one leg has no stand-in there.
+    // Skip it by name; any other error is still a failure.
+    let linked = true;
+    try {
+      fs.symlinkSync(custom, path.join(root, "linked.md"));
+    } catch (e) {
+      if (e?.code !== "EPERM" || e?.syscall !== "symlink") throw e;
+      linked = false;
+      t.diagnostic("symlinked-tracker leg skipped: no symlink privilege (EPERM)");
+    }
+    if (linked) {
+      process.env.CAREER_OPS_TRACKER = path.join(root, "linked.md");
+      check(3);
+    }
+  } finally {
+    if (priorRoot === undefined) delete process.env.CAREER_OPS_ROOT;
+    else process.env.CAREER_OPS_ROOT = priorRoot;
+    if (priorTracker === undefined) delete process.env.CAREER_OPS_TRACKER;
+    else process.env.CAREER_OPS_TRACKER = priorTracker;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("readStatusLog: an unreadable log throws instead of reading as empty", { skip: skipTs }, () => {

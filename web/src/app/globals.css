@@ -36,16 +36,6 @@
      raw brand in dark. Use for small text/badges; brand stays for accents,
      surfaces, icons and large headings (≥24px passes at 3:1). */
   --color-brand-text: var(--brand-text);
-  /* Sankey diagram tones. Runtime values so they can be tuned per theme.
-     Cohesion rule: the warm hues (brand / warn / danger / muted) sit on the
-     orange-to-brick side of the wheel, leaving ONE cool accent (info) for the
-     live in-flight path and ONE green for terminal success — so the chart
-     reads as two families instead of five competing ones. */
-  --color-sankey-info: var(--sankey-info);
-  --color-sankey-warn: var(--sankey-warn);
-  --color-sankey-success: var(--sankey-success);
-  --color-sankey-danger: var(--sankey-danger);
-  --color-sankey-muted: var(--sankey-muted);
 }
 
 :root {
@@ -60,12 +50,6 @@
   --brand-text: hsl(26 80% 36%); /* darkened brand for small text: 5.5 white / 5.1 cream / 4.7 surface-hover */
   --dot: 40 8% 42% / 0.09;
   --pre-bg: #f2f1ed;
-  /* Sankey tones — light. Dark enough to hold 3:1 on --surface, no more. */
-  --sankey-info: hsl(205 58% 48%);
-  --sankey-warn: hsl(32 74% 48%);
-  --sankey-success: hsl(152 42% 34%);
-  --sankey-danger: hsl(6 58% 50%);
-  --sankey-muted: hsl(30 8% 62%);
   color-scheme: light;
 }
 
@@ -81,13 +65,6 @@
   --brand-text: hsl(26 73% 51%); /* raw brand already passes in dark (≥4.95 on bg/surface) */
   --dot: 240 5% 65% / 0.10;
   --pre-bg: #111111;
-  /* Sankey tones — dark. Same hues, lifted in lightness so they don't sink
-     into #0a0a0a. */
-  --sankey-info: hsl(205 62% 60%);
-  --sankey-warn: hsl(34 72% 58%);
-  --sankey-success: hsl(152 44% 52%);
-  --sankey-danger: hsl(6 62% 62%);
-  --sankey-muted: hsl(30 6% 46%);
   color-scheme: dark;
 }
 
@@ -147,6 +124,63 @@ html {
   animation: job-progress 1.3s ease-in-out infinite;
 }
 
+/* ── Route transition feedback ──────────────────────────────────────────── */
+/* The skeleton remains intentionally neutral so it works in both themes and
+   keeps the page structure visible while server components/data resolve. */
+@keyframes skeleton-sheen {
+  100% { transform: translateX(100%); }
+}
+
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--fg) 7%, transparent);
+}
+
+.skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--fg) 9%, transparent),
+    transparent
+  );
+  animation: skeleton-sheen 1.5s ease-in-out infinite;
+}
+
+@keyframes route-bar-creep {
+  0% { transform: scaleX(0.02); }
+  40% { transform: scaleX(0.35); }
+  75% { transform: scaleX(0.68); }
+  100% { transform: scaleX(0.9); }
+}
+
+.route-bar {
+  transform-origin: 0 50%;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--color-brand) 70%, transparent), var(--color-brand), var(--color-brand-200));
+  box-shadow: 0 0 10px color-mix(in srgb, var(--color-brand) 60%, transparent);
+  will-change: transform, opacity;
+}
+
+.route-bar[data-state="loading"] {
+  opacity: 1;
+  animation: route-bar-creep 8s cubic-bezier(0.1, 0.7, 0.2, 1) forwards;
+}
+
+.route-bar[data-state="done"] {
+  opacity: 0;
+  transform: scaleX(1);
+  transition: transform 0.2s ease-out, opacity 0.35s ease-out 0.15s;
+}
+
+.route-bar[data-state="idle"] {
+  opacity: 0;
+  transform: scaleX(0);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .cli-cursor,
   .animate-terminal-popup,
@@ -154,6 +188,8 @@ html {
     animation: none;
   }
   .job-indeterminate::after { animation: none; width: 100%; opacity: 0.35; }
+  .skeleton::after { animation: none; }
+  .route-bar[data-state="loading"] { animation: none; transform: scaleX(0.9); }
 }
 
 /* ── Report / CV markdown prose (theme-aware) ───────────────────────────── */
@@ -162,6 +198,10 @@ html {
   font-size: 0.95rem;
   line-height: 1.7;
 }
+.report-prose > p,
+.report-prose > ul,
+.report-prose > ol,
+.report-prose > blockquote { max-width: 75ch; }
 .report-prose > :first-child { margin-top: 0; }
 .report-prose h1, .report-prose h2, .report-prose h3, .report-prose h4 {
   color: var(--fg);

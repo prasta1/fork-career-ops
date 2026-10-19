@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import Link from "next/link";
 import ReactMarkdown from "react-markdown";
@@ -14,8 +14,10 @@ import { useExplore } from "@/components/explore/explore-provider";
 import { WorkerCard } from "@/components/jobs/worker-card";
 import { Button } from "@/components/ui/button";
 import { dispatch, type ActionCtx, type DoneInfo } from "@/app/actions/registry";
+import { estimateRunCost } from "@/lib/run-cost-estimate.mjs";
 import { scoreNum } from "@/lib/format";
 import { pendingActOpenerStart } from "@/lib/act-envelope.mjs";
+import { cleanMessages } from "@/lib/assistant-history.mjs";
 import { cn } from "@/lib/cn";
 
 // ── message model: messages are PART arrays so a live worker card can render
@@ -127,24 +129,6 @@ function describePage(p: string): string {
 }
 
 // ── persistence migration: old {role,content:string} → parts[] ────────────────
-function migrate(raw: unknown): Msg[] | null {
-  if (!Array.isArray(raw)) return null;
-  return raw
-    .map((m): Msg | null => {
-      if (!m || typeof m !== "object") return null;
-      const role = (m as { role?: string }).role === "user" ? "user" : "assistant";
-      if (Array.isArray((m as { parts?: unknown }).parts)) {
-        // keep only serializable parts (drop transient pending confirms)
-        const parts = ((m as { parts: Part[] }).parts).filter(
-          (p) => p.type !== "confirm" || p.state !== "pending",
-        );
-        return { role, parts };
-      }
-      const content = (m as { content?: string }).content;
-      return { role, parts: [{ type: "text", text: typeof content === "string" ? content : "" }] };
-    })
-    .filter((x): x is Msg => !!x);
-}
 function msgText(m: Msg): string {
   return m.parts.filter((p): p is Extract<Part, { type: "text" }> => p.type === "text").map((p) => p.text).join(" ").trim();
 }
@@ -153,11 +137,43 @@ export function AssistantConsole() {
   const [open, setOpen] = useState(false);
   const [cliId, setCliId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Msg[]>([]);
+  const [chats, setChats] = useState<{ id: string; title: string; revision: number }[]>([]);
+  const [chatReady, setChatReady] = useState(false);
+  const [chatPending, setChatPending] = useState(false);
+  const [saveError, setSaveError] = useState("");
+  const [chatWarnings, setChatWarnings] = useState<{ id: string; error: string }[]>([]);
+  const activeChat = useRef<{ id: string; revision: number; title?: string }>({ id: "", revision: 0 });
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
+  const savedSnapshot = useRef("");
+  const saveQueue = useRef<Promise<void>>(Promise.resolve());
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const router = useRouter();
   const pathname = usePathname();
   const scrollRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const openerRef = useRef<HTMLButtonElement>(null);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
+  const focusOnOpen = useRef(false);
+  const focusOnClose = useRef(false);
+  const panelTitleId = useId();
+  const inputId = useId();
+  const inputHelpId = `${inputId}-help`;
+
+  function openAssistant(trigger?: HTMLElement) {
+    // Reopening an already visible assistant must not interrupt the user.
+    if (!panelRef.current) {
+      const source = trigger ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
+      returnFocusRef.current = source === document.body ? null : source;
+      focusOnOpen.current = true;
+    }
+    setOpen(true);
+  }
+  function closeAssistant() {
+    focusOnClose.current = !!panelRef.current?.contains(document.activeElement);
+    setOpen(false);
+  }
 
   const { jobs, startJob } = useJobs();
   const pipeline = usePipeline();
@@ -209,6 +225,24 @@ export function AssistantConsole() {
     if (input) el.style.height = `${Math.min(el.scrollHeight, INPUT_MAX_PX[size])}px`;
   }, [input, size, open]);
 
+  useLayoutEffect(() => {
+    if (open && focusOnOpen.current) {
+      focusOnOpen.current = false;
+      // A removed Ask button leaves focus on body. Preserve any newer focus.
+      if (document.activeElement !== document.body && document.activeElement !== returnFocusRef.current) return;
+      const target = inputRef.current && !inputRef.current.disabled
+        ? inputRef.current
+        : panelRef.current?.querySelector<HTMLElement>('a[href="/config"]');
+      target?.focus();
+    } else if (!open && focusOnClose.current) {
+      focusOnClose.current = false;
+      if (document.activeElement !== document.body) return;
+      const trigger = returnFocusRef.current;
+      const usable = trigger?.isConnected && trigger.getClientRects().length > 0 && !trigger.matches(":disabled, [inert], [inert] *");
+      (usable ? trigger : openerRef.current)?.focus();
+    }
+  }, [open]);
+
   // selected CLI from Config (reacts to changes in other tabs)
   useEffect(() => {
     function read() {
@@ -224,27 +258,171 @@ export function AssistantConsole() {
     return () => window.removeEventListener("storage", read);
   }, []);
 
-  // restore + persist conversation
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem(CHAT_KEY);
-      const m = raw ? migrate(JSON.parse(raw)) : null;
-      if (m && m.length) setMessages(m);
-    } catch {
-      /* ignore */
+  async function chatRequest(url: string, init?: RequestInit) {
+    const response = await fetch(url, init);
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Conversation request failed");
+    return data;
+  }
+  async function refreshChats() {
+    const data = await chatRequest("/api/assistant/chats");
+    setChats(data.chats);
+    setChatWarnings(data.errors);
+  }
+  function flushChat(title?: string): Promise<void> {
+    const current = activeChat.current;
+    let snapshot: Msg[];
+    try { snapshot = cleanMessages(messagesRef.current) as Msg[]; }
+    catch (e) {
+      const error = e instanceof Error ? e : new Error("Conversation could not be saved");
+      setSaveError(error.message);
+      return Promise.reject(error);
     }
+    if (!snapshot.some(m => m.role === "user")) return Promise.resolve();
+    const encoded = JSON.stringify(snapshot);
+    const operation = saveQueue.current.catch(() => {}).then(async () => {
+      if (encoded === savedSnapshot.current && title === undefined) return;
+      try {
+        const chat = await chatRequest("/api/assistant/chats", {
+          method: "PUT", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...current, ...(title ? { title } : {}), messages: snapshot }),
+        });
+        current.revision = chat.revision;
+        current.title = chat.title;
+        savedSnapshot.current = encoded;
+        setSaveError("");
+        await refreshChats();
+      } catch (e) {
+        setSaveError(e instanceof Error ? e.message : "Conversation was not saved");
+        throw e;
+      }
+    });
+    saveQueue.current = operation;
+    return operation;
+  }
+  const flushRef = useRef(flushChat);
+  flushRef.current = flushChat;
+
+  useEffect(() => {
+    let cancelled = false;
+    async function restore() {
+      try {
+        const data = await chatRequest("/api/assistant/chats");
+        let restored;
+        const legacy = localStorage.getItem(CHAT_KEY);
+        if (legacy) {
+          const migrated = cleanMessages(JSON.parse(legacy));
+          if (migrated.some(m => m.role === "user")) {
+            // A stable migration id makes retrying a lost response safe.
+            const key = `${CHAT_KEY}:migration-id`;
+            const id = localStorage.getItem(key) || crypto.randomUUID();
+            localStorage.setItem(key, id);
+            if (data.chats.some((c: { id: string }) => c.id === id)) {
+              restored = await chatRequest(`/api/assistant/chats?id=${id}`);
+            } else {
+              restored = await chatRequest("/api/assistant/chats", {
+                method: "PUT", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ id, revision: 0, messages: migrated }),
+              });
+            }
+          }
+          localStorage.removeItem(CHAT_KEY); // only after a successful disk write
+        }
+        if (!restored && data.chats.length) restored = await chatRequest(`/api/assistant/chats?id=${data.chats[0].id}`);
+        if (cancelled) return;
+        activeChat.current = restored ? { id: restored.id, revision: restored.revision, title: restored.title } : { id: crypto.randomUUID(), revision: 0 };
+        const next = restored ? cleanMessages(restored.messages) as Msg[] : [];
+        savedSnapshot.current = JSON.stringify(next);
+        messagesRef.current = next;
+        setMessages(next);
+        await refreshChats();
+        setChatReady(true);
+      } catch (e) { if (!cancelled) setSaveError(e instanceof Error ? e.message : "Could not load conversations"); }
+    }
+    void restore();
+    return () => { cancelled = true; };
   }, []);
   useEffect(() => {
-    if (!messages.length) return;
+    if (!chatReady || chatPending || busy) return;
+    const timer = setTimeout(() => { void flushRef.current().catch(() => {}); }, 400);
+    return () => clearTimeout(timer);
+  }, [messages, chatReady, chatPending, busy]);
+  useEffect(() => {
+    if (!chatReady || chatPending || busy) return;
+    void flushRef.current().catch(() => {});
+  }, [busy, chatReady, chatPending]);
+  useEffect(() => {
+    if (!chatReady || chatPending) return;
+    const save = () => { if (document.visibilityState === "hidden") void flushRef.current().catch(() => {}); };
+    document.addEventListener("visibilitychange", save);
+    return () => document.removeEventListener("visibilitychange", save);
+  }, [chatReady, chatPending]);
+
+  async function selectChat(id?: string) {
+    if (busy || chatPending || !chatReady) return;
+    setChatPending(true);
     try {
-      const serializable = messages
-        .slice(-30)
-        .map((m) => ({ role: m.role, parts: m.parts.filter((p) => p.type !== "confirm" || p.state !== "pending") }));
-      localStorage.setItem(CHAT_KEY, JSON.stringify(serializable));
-    } catch {
-      /* ignore */
-    }
-  }, [messages]);
+      await flushChat();
+      const chat = id ? await chatRequest(`/api/assistant/chats?id=${id}`) : null;
+      activeChat.current = chat ? { id: chat.id, revision: chat.revision, title: chat.title } : { id: crypto.randomUUID(), revision: 0 };
+      const next = chat ? cleanMessages(chat.messages) as Msg[] : [];
+      savedSnapshot.current = JSON.stringify(next);
+      messagesRef.current = next;
+      setMessages(next);
+      setInput("");
+      confirmRuns.current.clear();
+    } catch (e) { setSaveError(e instanceof Error ? e.message : "Could not switch conversations"); }
+    finally { setChatPending(false); }
+  }
+  function exportChat() {
+    // Export the live draft even if it exceeds the storage limits.
+    const blob = new Blob([JSON.stringify({ ...activeChat.current, messages: messagesRef.current, draft: input }, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `conversation-${activeChat.current.id}.json`;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+  async function discardAndStartChat() {
+    if (busy || chatPending || !chatReady) return;
+    if (!window.confirm("Discard unsaved changes and start a new conversation? Saved conversations stay on disk. Export this conversation first if you want to keep the unsaved text.")) return;
+    setChatPending(true);
+    try {
+      // Let writes already in flight finish before changing the active id.
+      await saveQueue.current.catch(() => {});
+      activeChat.current = { id: crypto.randomUUID(), revision: 0 };
+      savedSnapshot.current = "";
+      messagesRef.current = [];
+      setMessages([]);
+      setInput("");
+      confirmRuns.current.clear();
+      setSaveError("");
+    } finally { setChatPending(false); }
+  }
+  async function renameChat() {
+    const title = window.prompt("Conversation name", activeChat.current.title || "");
+    if (!title?.trim()) return;
+    setChatPending(true);
+    try { await flushChat(title.trim()); } catch { /* shown by flushChat */ }
+    finally { setChatPending(false); }
+  }
+  async function removeChat() {
+    if (!window.confirm("Delete this conversation?")) return;
+    setChatPending(true);
+    try {
+      await flushChat();
+      const { id, revision } = activeChat.current;
+      await chatRequest(`/api/assistant/chats?id=${id}&revision=${revision}`, { method: "DELETE" });
+      activeChat.current = { id: crypto.randomUUID(), revision: 0 };
+      savedSnapshot.current = "";
+      messagesRef.current = [];
+      setMessages([]);
+      confirmRuns.current.clear();
+      await refreshChats();
+    } catch (e) { setSaveError(e instanceof Error ? e.message : "Could not delete conversation"); }
+    finally { setChatPending(false); }
+  }
 
   useEffect(() => {
     if (open && messages.length === 0) setMessages([{ role: "assistant", parts: [{ type: "text", text: GREETING }] }]);
@@ -298,6 +476,7 @@ export function AssistantConsole() {
         const m = jobsRef.current.filter((j) => j.input === url).sort((a, b) => b.startedAt - a.startedAt);
         return m[0];
       },
+      estimateCost: (kind, count) => estimateRunCost(jobsRef.current, kind, count),
       rememberFact: (fact) => {
         fetch("/api/memory", {
           method: "POST",
@@ -330,6 +509,18 @@ export function AssistantConsole() {
       },
       writePortals: (roles, location) => {
         fetch("/api/portals", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ roles, location }) }).catch(() => {});
+      },
+      writePersonalization: (patch) => {
+        fetch("/api/personalization", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch) })
+          .then(async (r) => {
+            // A refused or failed write must not pass for a saved one: the route
+            // answers 409/500 with the reason, and the file is left as it was.
+            if (!r.ok) throw new Error(((await r.json().catch(() => null)) as { error?: string } | null)?.error || `HTTP ${r.status}`);
+            router.refresh();
+            // The onboarding panel listens for this to refetch section state.
+            window.dispatchEvent(new CustomEvent("co-onboarding-changed"));
+          })
+          .catch((e) => appendParts([{ type: "note", text: `Your personalization was NOT saved: ${e instanceof Error ? e.message : "the request failed"}` }]));
       },
     };
   }
@@ -391,14 +582,17 @@ export function AssistantConsole() {
 
   async function send(forced?: string) {
     const text = (forced ?? input).trim();
-    if (!text || busy || !cliId) return;
+    if (!text || busy || !cliId || !chatReady || chatPending) return;
     if (forced === undefined) setInput("");
     const history = messages.filter((m) => msgText(m) && msgText(m) !== GREETING).map((m) => ({ role: m.role, content: msgText(m) }));
-    setMessages((m) => [...m, { role: "user", parts: [{ type: "text", text }] }, { role: "assistant", parts: [{ type: "text", text: "" }] }]);
+    const next: Msg[] = [...messages, { role: "user", parts: [{ type: "text", text }] }, { role: "assistant", parts: [{ type: "text", text: "" }] }];
+    messagesRef.current = next;
+    setMessages(next);
     setBusy(true);
     handledRef.current = new Set();
     const shimsDone = new Set<string>();
     try {
+      await flushChat();
       const res = await fetch("/api/assistant", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -472,23 +666,13 @@ export function AssistantConsole() {
     }
   }
 
-  function resetChat() {
-    setMessages([{ role: "assistant", parts: [{ type: "text", text: GREETING }] }]);
-    confirmRuns.current.clear();
-    try {
-      localStorage.removeItem(CHAT_KEY);
-    } catch {
-      /* ignore */
-    }
-  }
-
   // Other surfaces (e.g. the onboarding banner) can open the assistant and kick
   // off a turn via a window event.
   const sendRef = useRef<(m?: string) => void>(() => {});
   sendRef.current = send;
   useEffect(() => {
     function onOpen(e: Event) {
-      setOpen(true);
+      openAssistant();
       const msg = (e as CustomEvent).detail?.message as string | undefined;
       if (msg) setTimeout(() => sendRef.current(msg), 80);
     }
@@ -530,7 +714,8 @@ export function AssistantConsole() {
     <>
       {!open && (
         <button
-          onClick={() => setOpen(true)}
+          ref={openerRef}
+          onClick={(e) => openAssistant(e.currentTarget)}
           className="fixed bottom-5 right-5 z-50 flex items-center justify-center gap-2 rounded-full border border-border bg-surface/90 py-1.5 pl-1.5 pr-4 shadow-lg backdrop-blur transition-colors hover:bg-surface-hover max-sm:min-h-[44px]"
           aria-label="Open assistant"
         >
@@ -540,24 +725,53 @@ export function AssistantConsole() {
       )}
 
       {open && (
-        <div className={cn("fixed z-50 flex flex-col overflow-hidden rounded-2xl border border-border bg-surface shadow-2xl", PANEL_CLASS[size])}>
+        <div
+          ref={panelRef}
+          role="region"
+          aria-labelledby={panelTitleId}
+          onKeyDown={(e) => {
+            // Let composition and native select popups handle Escape first.
+            if (e.key !== "Escape" || e.defaultPrevented || e.nativeEvent.isComposing || e.keyCode === 229 || (e.target instanceof HTMLElement && e.target.closest("select"))) return;
+            e.preventDefault();
+            e.stopPropagation();
+            closeAssistant();
+          }}
+          className={cn("fixed z-50 flex flex-col overflow-hidden rounded-2xl border border-border bg-surface shadow-2xl", PANEL_CLASS[size])}
+        >
           <header className="flex items-center gap-2.5 border-b border-border px-4 py-3">
             <CoMark size={26} />
             <div className="flex-1">
-              <div className="text-sm font-semibold tracking-tight">Assistant</div>
+              <div id={panelTitleId} className="text-sm font-semibold tracking-tight">Assistant</div>
               <div className="text-xs text-faint">{cliId ? `via ${cliId}` : "no CLI configured"}</div>
             </div>
             <Button variant="ghost" size="icon" onClick={cycleSize} className="text-muted" aria-label={SIZE_LABEL[size]} title={SIZE_LABEL[size]}>
               {size === "full" ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
             </Button>
-            <Button variant="ghost" size="icon" onClick={resetChat} className="text-muted" aria-label="New chat" title="New chat">
+            <Button variant="ghost" size="icon" onClick={() => void selectChat()} disabled={busy || chatPending || !chatReady} className="text-muted" aria-label="New chat" title="New chat">
               <RotateCcw className="size-4" />
             </Button>
-            <Button variant="ghost" size="icon" onClick={() => setOpen(false)} className="text-muted" aria-label="Close assistant">
+            <Button variant="ghost" size="icon" onClick={closeAssistant} className="text-muted" aria-label="Close assistant">
               <X className="size-4" />
             </Button>
           </header>
 
+          <div className="flex gap-2 border-b border-border px-4 py-2">
+            <select aria-label="Conversation history" className="min-w-0 flex-1 bg-surface text-sm" value={chats.some(c => c.id === activeChat.current.id) ? activeChat.current.id : ""} disabled={busy || chatPending || !chatReady} onChange={e => void selectChat(e.target.value || undefined)}>
+              <option value="">New chat</option>
+              {chats.map(c => <option key={c.id} value={c.id}>{c.title}</option>)}
+            </select>
+            <button className="text-xs text-muted disabled:opacity-40" disabled={busy || chatPending || !activeChat.current.revision} onClick={() => void renameChat()}>Rename</button>
+            <button className="text-xs text-muted disabled:opacity-40" disabled={busy || chatPending || !activeChat.current.revision} onClick={() => void removeChat()}>Delete</button>
+          </div>
+          {chatWarnings.map(warning => <div key={warning.id} role="alert" className="px-4 py-2 text-sm text-amber-600">{warning.error}. Other conversations are still available.</div>)}
+          {saveError && <div role="alert" className="space-y-2 px-4 py-2 text-sm text-amber-600">
+            <p>{saveError}</p>
+            {chatReady ? <div className="flex flex-wrap gap-3">
+              <button className="underline" disabled={busy || chatPending} onClick={() => void flushChat().catch(() => {})}>Retry save</button>
+              <button className="underline" disabled={busy || chatPending} onClick={exportChat}>Export conversation</button>
+              <button className="underline" disabled={busy || chatPending} onClick={() => void discardAndStartChat()}>Discard unsaved changes and start new chat</button>
+            </div> : <button className="underline" onClick={() => window.location.reload()}>Reload</button>}
+          </div>}
           <div ref={scrollRef} className="flex-1 space-y-4 overflow-y-auto px-4 py-4">
             {messages.map((m, i) => {
               const hasVisible = m.parts.some((p) => (p.type === "text" && p.text.trim()) || p.type !== "text");
@@ -614,13 +828,17 @@ export function AssistantConsole() {
           )}
 
           <div className="border-t border-border p-3">
+            <label htmlFor={inputId} className="sr-only">Message to assistant</label>
+            <p id={inputHelpId} className="sr-only">Enter sends your message. Shift+Enter adds a new line.</p>
             <div className="flex items-end gap-2">
               <textarea
+                id={inputId}
+                aria-describedby={inputHelpId}
                 ref={inputRef}
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) {
+                  if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing && e.keyCode !== 229) {
                     e.preventDefault();
                     send();
                   }
@@ -632,8 +850,11 @@ export function AssistantConsole() {
                 className="flex-1 resize-none rounded-xl border border-border bg-surface/60 px-3 py-2 text-sm outline-none transition-colors placeholder:text-faint focus:border-brand/50 disabled:opacity-50"
               />
               <button
-                onClick={() => send()}
-                disabled={busy || !input.trim() || !cliId}
+                onClick={(e) => {
+                  if (document.activeElement === e.currentTarget) inputRef.current?.focus();
+                  void send();
+                }}
+                disabled={busy || chatPending || !chatReady || !input.trim() || !cliId}
                 className="rounded-xl bg-brand p-2 text-brand-foreground transition-colors hover:bg-brand-200 disabled:opacity-40"
                 aria-label="Send"
               >
@@ -719,29 +940,62 @@ function PartView({
     );
   }
   if (part.type === "confirm") {
-    return (
-      <div className="rounded-xl border border-brand/40 bg-brand-soft p-2.5">
-        <div className="text-xs font-medium text-foreground">{part.summary}</div>
-        {part.state === "pending" ? (
-          <div className="mt-2 flex gap-2">
-            <button
-              onClick={() => onConfirm(part.cid, true)}
-              className="rounded-full bg-brand px-3 py-1 text-xs font-medium text-brand-foreground transition-colors hover:bg-brand-200"
-            >
-              Confirm
-            </button>
-            <button
-              onClick={() => onConfirm(part.cid, false)}
-              className="rounded-full border border-border px-3 py-1 text-xs text-muted transition-colors hover:bg-surface-hover hover:text-foreground"
-            >
-              Cancel
-            </button>
-          </div>
-        ) : (
-          <div className="mt-1 text-xs text-faint">{part.state === "done" ? "✓ started" : "cancelled"}</div>
-        )}
-      </div>
-    );
+    return <ConfirmationCard key={part.cid} part={part} onConfirm={onConfirm} />;
   }
   return null;
+}
+
+function ConfirmationCard({ part, onConfirm }: {
+  part: Extract<Part, { type: "confirm" }>;
+  onConfirm: (cid: string, accept: boolean) => void;
+}) {
+  const id = useId();
+  const summaryId = `${id}-summary`;
+  const resultId = `${id}-result`;
+  const resultRef = useRef<HTMLDivElement>(null);
+  const decisionRef = useRef<HTMLButtonElement | null>(null);
+
+  // Only continue focus from the decision control being removed. Arrival,
+  // history restoration and unrelated focus must never pull the user here.
+  useLayoutEffect(() => {
+    const decision = decisionRef.current;
+    if (part.state === "pending" || !decision) return;
+    decisionRef.current = null;
+    if (document.activeElement === decision || document.activeElement === document.body) {
+      resultRef.current?.focus();
+    }
+  }, [part.state]);
+
+  function decide(button: HTMLButtonElement, accept: boolean) {
+    decisionRef.current = document.activeElement === button ? button : null;
+    onConfirm(part.cid, accept);
+  }
+
+  return (
+    <div role="group" aria-labelledby={summaryId} className="rounded-xl border border-brand/40 bg-brand-soft p-2.5">
+      <div id={summaryId} className="text-xs font-medium text-foreground">{part.summary}</div>
+      {part.state === "pending" ? (
+        <div className="mt-2 flex gap-2">
+          <button
+            aria-label={`Confirm: ${part.summary}`}
+            onClick={(e) => decide(e.currentTarget, true)}
+            className="rounded-full bg-brand px-3 py-1 text-xs font-medium text-brand-foreground transition-colors hover:bg-brand-200"
+          >
+            Confirm
+          </button>
+          <button
+            aria-label={`Cancel: ${part.summary}`}
+            onClick={(e) => decide(e.currentTarget, false)}
+            className="rounded-full border border-border px-3 py-1 text-xs text-muted transition-colors hover:bg-surface-hover hover:text-foreground"
+          >
+            Cancel
+          </button>
+        </div>
+      ) : (
+        <div ref={resultRef} tabIndex={-1} aria-labelledby={`${summaryId} ${resultId}`} className="mt-1 rounded text-xs text-faint focus-visible:outline-2 focus-visible:outline-brand">
+          <span id={resultId}>{part.state === "done" ? "✓ started" : "cancelled"}</span>
+        </div>
+      )}
+    </div>
+  );
 }

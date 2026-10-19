@@ -1,4 +1,5 @@
 import { canonStatus } from "../status-alias.mjs";
+import { applyLineLabel } from "../report-sections.mjs";
 
 // states.yml forbids a date in the status cell, but real trackers carry one
 // anyway ("Evaluated 2026-08-21") and /^evaluat/i tolerated that. canonStatus()
@@ -17,8 +18,9 @@ const baseStatus = (s) => String(s ?? "").replace(/\s+\d{4}-\d{2}-\d{2}\s*$/, ""
  * merge-tracker now re-sorts the tracker by # on every write, which would have
  * quietly changed the card set with no code change anywhere near this file.
  *
- * Newest first is what a "Today" queue means. The score breaks ties so that on
- * a day with several evaluations the better opportunity leads.
+ * Best score first, because a power user with dozens of scored rows needs the
+ * strongest match on top, not the newest one. The date breaks ties so a fresh
+ * evaluation leads among equal scores.
  *
  * Plain .mjs (same pattern as tracker-table.mjs and cv-selection.mjs) so the
  * test suite imports it with no build step and no `@/` alias loader — the whole
@@ -54,15 +56,25 @@ export function pickAwaitingDecision(applications, scoreOf, limit = 6) {
     // exists to fix. status-alias.mjs is the single alias table and its test
     // loads states.yml, so this cannot drift as a literal regex does.
     .filter((a) => canonStatus(baseStatus(a.status)) === "EVALUATED")
-    // A row with no date sorts LAST rather than jumping the queue. "" compares
-    // LESS than any real date, and the comparison is descending (b before a),
-    // so "least" lands at the end — which is where an undated row belongs in a
-    // recency queue. Covered by a test, because that is two negations deep and
-    // the wrong one is silent.
-    .sort((a, b) => {
-      const byDate = (b.date || "").localeCompare(a.date || "");
-      if (byDate !== 0) return byDate;
-      return rank(b.score) - rank(a.score);
-    })
+    // An unscored row ranks -1 and an undated row compares "" (least), and both
+    // comparisons are descending, so either one lands at the end.
+    .sort((a, b) => rank(b.score) - rank(a.score) || (b.date || "").localeCompare(a.date || ""))
     .slice(0, limit);
+}
+
+const AWAITING_GROUPS = ["Recommended", "Below the apply line", "Not scored yet"];
+
+/**
+ * Splits the ranked queue into the groups the Today page renders, keeping the
+ * order inside each group. A row with no score has not been judged against the
+ * apply line, so it gets its own group instead of "Below the apply line".
+ *
+ * @template {{score?: string}} T
+ * @param {T[]} awaiting  output of pickAwaitingDecision
+ * @returns {[string, T[]][]}  only the non-empty groups, in display order
+ */
+export function groupAwaiting(awaiting) {
+  return AWAITING_GROUPS
+    .map((label) => /** @type {[string, T[]]} */ ([label, awaiting.filter((a) => (applyLineLabel(a.score) ?? "Not scored yet") === label)]))
+    .filter(([, group]) => group.length > 0);
 }
